@@ -526,6 +526,22 @@ int main(int argc, char** argv) {
     }
     REQUIRE(none);
 
+    // ---- Level 8: the pause menu does not run a streak out ----
+    std::puts("level 8: streak survives the pause menu");
+    host.bolt_calls.clear();
+    lay_out_level(10, 100);
+    level_load(8, false);
+    tick();
+    die(20);  // The boss (drop 0: Basic, 5).
+    host.phase = OPENRAC_PLAY_MENU;
+    tick(1000);  // Far past the 5 s window, all of it paused.
+    host.phase = OPENRAC_PLAY_PLAYING;
+    tick();
+    die(21);  // The set piece: the second kill of the streak.
+    REQUIRE(host.bolt_calls.size() == 2);
+    REQUIRE(host.bolt_calls[0] == 5);
+    REQUIRE(host.bolt_calls[1] == 10);  // x2.
+
     std::puts("load_test: all passed");
     return 0;
 }

@@ -48,7 +48,19 @@ void slot_reused_by_another_class() {
     // The rocket ended unseen and the slot holds an enemy's spit now: neither the rocket's weapon
     // nor any weapon.
     CHECK_EQ(classify_hit(source(50, 9999), shots), -1);
-    shots.ended(50);
+    shots.ended(50, 1498, 27);
+    CHECK_EQ(shots.size(), 0u);
+}
+
+void end_does_not_drop_a_newer_shot() {
+    // A rocket in slot 60 ends, and a seeker fired the same tick took slot 60 and was told first:
+    // the rocket's end must not forget the seeker.
+    ShotTracker shots;
+    shots.fired(60, 1498, 27);
+    shots.fired(60, 3329, 24);
+    shots.ended(60, 1498, 27);
+    CHECK_EQ(classify_hit(source(60, 3329), shots), 24);
+    shots.ended(60, 3329, 24);
     CHECK_EQ(shots.size(), 0u);
 }
 
@@ -172,6 +184,7 @@ int main() {
     projectile_from_tracker();
     delayed_projectile_after_switch();
     slot_reused_by_another_class();
+    end_does_not_drop_a_newer_shot();
     rounds_weapons_by_class();
     wrench_hits();
     unknown_sources_fail_safe();

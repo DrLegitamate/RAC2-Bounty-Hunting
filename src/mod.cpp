@@ -58,6 +58,7 @@ constexpr int kMobySlots = 4096;
 constexpr int kListRefreshesPerTick = 2;   // Extra moby list reads a hit may ask for each tick.
 constexpr std::uint32_t kLostTicks = 30;   // Ticks a target must be missing to count as lost.
 constexpr int kHueMinDistance = 60;
+constexpr int kMaxPaintRefusals = 3;       // Then the marker stays: no moby_material each poll.
 
 // ---- Settings ------------------------------------------------------------------------------
 
@@ -157,7 +158,8 @@ struct State {
     PaidKills paid;
     ShotTracker shots;
     HitLedger ledger;
-    bool have_count_kill = false;
+    bool have_count_kill = false;  // The port has rac2.combat.count_kill.
+    bool count_kill_seen = false;  // ...and it has been seen to fire inside a recorded death.
     std::unordered_set<int> enemy_classes;  // The fallback without Moby_CountKill.
     std::uint32_t dying = 0;                // The moby Moby_RecordDeath is recording now.
     bool dying_counted = false;
@@ -172,6 +174,7 @@ struct State {
     int last_hue = -1;
     int (*equip)(std::int32_t) = nullptr;
     std::uint32_t material = kMaterialNone;
+    int paint_refusals = 0;  // moby_material refusals this contract: retried a few times only.
 
     // Notices.
     Banner banner;
@@ -341,6 +344,7 @@ void apply(State& s, const PaintOp& op) {
     const int result = s.api->moby_material(s.mod->handle(), op.address, op.material, op.rgb);
     if (result != OPENRAC_HOOK_OK && op.material != kMaterialNone) {
         s.paint.refused();
+        ++s.paint_refusals;
     }
 }
 
@@ -355,8 +359,8 @@ bool wants_sighting(const State& s) {
     if (s.book.contract().status != ContractStatus::Active) {
         return false;
     }
-    const bool paint_due =
-        s.settings.highlight && s.material != kMaterialNone && !s.paint.painted();
+    const bool paint_due = s.settings.highlight && s.material != kMaterialNone
+                           && !s.paint.painted() && s.paint_refusals < kMaxPaintRefusals;
     return s.target_address == 0 || paint_due;
 }
 
@@ -418,6 +422,7 @@ void start_contract(State& s, const std::vector<Candidate>& candidates) {
     s.last_hue = c.hue;
     s.book.start(c);
     s.tier_known = false;
+    s.paint_refusals = 0;
     set_reward(s, -1);
     apply(
         s,
@@ -555,7 +560,7 @@ void on_fire(void* user, const openrac_weapon_shot* shot) {
 void on_end(void* user, const openrac_shot_end* end) {
     State& s = *static_cast<State*>(user);
     if (end != nullptr && end->slot >= 0) {
-        s.shots.ended(end->slot);
+        s.shots.ended(end->slot, end->oclass, end->item);
     }
 }
 
@@ -591,7 +596,8 @@ void record_death(
     std::int32_t arg
 ) {
     const int slot = slot_of(s, moby);
-    const int key = slot >= 0 ? s.key_of[static_cast<std::size_t>(slot)] : -1;
+    const int key =
+        slot >= 0 && slot < kMobySlots ? s.key_of[static_cast<std::size_t>(slot)] : -1;
     const int moby_class = class_at(s, slot);
     const int bolts = own_bolts(s, moby);
 
@@ -603,9 +609,14 @@ void record_death(
     if (slot < 0) {
         return;
     }
-    const bool enemy = s.have_count_kill
-                           ? s.dying_counted
-                           : key >= 0 && s.enemy_classes.count(moby_class) != 0;
+    // The game's own verdict once its hook has been seen to work; until then (or without it) also
+    // the level's enemy classes, so a port that lists the hook but never calls it still pays.
+    if (s.dying_counted) {
+        s.count_kill_seen = true;
+    }
+    const bool by_class = key >= 0 && s.enemy_classes.count(moby_class) != 0;
+    const bool enemy = s.have_count_kill && s.count_kill_seen ? s.dying_counted
+                                                              : s.dying_counted || by_class;
     const FatalResult fatal = s.ledger.fatal(slot, s.tick);
     s.ledger.forget(slot);
 
@@ -629,27 +640,48 @@ void record_death(
         }
     }
 
-    // The contract.
+    // The contract: its target by key alone (placed mobys' keys are unique; a spawned copy of the
+    // target has none), so a death in a slot not yet re-found after a reload still counts.
     const Contract& c = s.book.contract();
-    if (c.status == ContractStatus::Active && slot == c.slot && key == c.key) {
+    if (c.status == ContractStatus::Active && key >= 0 && key == c.key) {
         target_died(s, moby, fatal);
     }
 }
 
 void frame(State& s) {
-    ++s.tick;
     s.refreshes = 0;
 
     openrac_play_status status{};
     status.size = sizeof status;
     s.api->play_status(&status);
     s.phase = status.phase;
+    // The mod's clock runs only while the player plays: a streak, a hit's window and a banner do
+    // not run out under the pause menu or in a scene.
+    if (status.phase == OPENRAC_PLAY_PLAYING) {
+        ++s.tick;
+    }
     const bool in_level = status.phase >= OPENRAC_PLAY_PLAYING && status.level >= 0;
     if (!in_level) {
         s.api->hud_text_set(s.mod->handle(), nullptr, 0);
         return;
     }
     refresh_list(s);
+
+    // A level load the load hook did not see (or one the port counts after it): start this load's
+    // tracking afresh and find the target again by its key; the contract itself stays.
+    if (status.loads != s.loads) {
+        s.loads = status.loads;
+        s.shots.clear();
+        s.ledger.clear();
+        s.paint.level_changed();
+        s.target_address = 0;
+        s.missing = false;
+        Contract& c = s.book.contract();
+        if (c.status == ContractStatus::Active) {
+            c.slot = s.api->moby_slot(c.key);
+            s.paint.moved(c.slot);
+        }
+    }
 
     s.hero_slot = s.api->figure_slot(s.mod->handle(), -1);
     s.hero_class = s.hero_slot >= 0 && s.hero_slot < kMobySlots
@@ -671,7 +703,8 @@ void frame(State& s) {
     // The target: still there, in the slot its key names?
     Contract& c = s.book.contract();
     if (c.status == ContractStatus::Active && status.loads == s.loads) {
-        const bool there = c.slot >= 0 && s.key_of[static_cast<std::size_t>(c.slot)] == c.key
+        const bool there = c.slot >= 0 && c.slot < kMobySlots
+                           && s.key_of[static_cast<std::size_t>(c.slot)] == c.key
                            && s.class_of[static_cast<std::size_t>(c.slot)] == c.moby_class;
         if (!there) {
             const int slot = s.api->moby_slot(c.key);
@@ -771,15 +804,21 @@ void load(openrac::Mod& mod) {
         post_hit(state(), victim, request);
         original(victim, request);
     });
-    mod.hook<openrac::rac2::Moby_GetHitMessage>(
-        [](auto original, std::uint32_t moby, std::uint32_t mask, std::int32_t keep) {
-            State& st = state();
-            if (wants_sighting(st)) {
-                sighted(st, moby);
+    // Only for seeing the target early, to paint it: without it the paint waits for a hit.
+    try {
+        mod.hook<openrac::rac2::Moby_GetHitMessage>(
+            [](auto original, std::uint32_t moby, std::uint32_t mask, std::int32_t keep) {
+                State& st = state();
+                if (wants_sighting(st)) {
+                    sighted(st, moby);
+                }
+                return original(moby, mask, keep);
             }
-            return original(moby, mask, keep);
-        }
-    );
+        );
+    } catch (const openrac::Error& e) {
+        mod.warn(std::string("rac2.combat.get_hit unavailable (") + e.what()
+                 + "): the target is painted from its first hit");
+    }
     mod.hook<openrac::rac2::Level_Load>([](auto original, std::int32_t load, std::int32_t resume) {
         const std::int32_t next = original(load, resume);
         level_loaded(state(), resume != 0);

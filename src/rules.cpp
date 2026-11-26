@@ -102,8 +102,12 @@ void ShotTracker::fired(int slot, int moby_class, int item) {
     m_shots[slot] = Shot{moby_class, item};
 }
 
-void ShotTracker::ended(int slot) {
-    m_shots.erase(slot);
+void ShotTracker::ended(int slot, int moby_class, int item) {
+    const auto found = m_shots.find(slot);
+    if (found != m_shots.end() && found->second.moby_class == moby_class
+        && found->second.item == item) {
+        m_shots.erase(found);
+    }
 }
 
 int ShotTracker::item_of(int slot, int moby_class) const {

@@ -96,7 +96,9 @@ private:
 class ShotTracker {
 public:
     void fired(int slot, int moby_class, int item);
-    void ended(int slot);
+    // A shot ended. Its slot is free at once, and a new shot told in the same batch may already
+    // hold it: only the shot that ended, by class and item, is forgotten.
+    void ended(int slot, int moby_class, int item);
     void clear() { m_shots.clear(); }
 
     // Returns the item of the live shot in `slot` of class `moby_class`, or -1 (none, or the slot

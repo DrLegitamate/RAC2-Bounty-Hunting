@@ -16,7 +16,10 @@ A death counts when the game records it **and** counts it as an enemy.
 
 `rac2.combat.count_kill` was added to OpenRAC's binding table after SDK 1.36 (OpenRAC commit
 `e140714`, 2026-11-25). The mod therefore asks for it at run time and does not list it in the
-manifest, whose hooks `package_mod.py` checks against the 1.36 table. On a port without it:
+manifest, whose hooks `package_mod.py` checks against the 1.36 table. Until the hook has been
+seen firing inside a recorded death, a death also counts if the fallback below says so. A port
+that offers the hook but never routes the game's internal call through it then still pays. On a
+port without it:
 
 - **Fallback:** an enemy is a placed moby (it has a key) whose class `moby_copy_check` judged at
   this level's load to be of the enemy kind. The port's judge (`port/game/rac2/host/enemy_copies.c`,
@@ -42,7 +45,8 @@ At `rac2.level.load`'s return, the mod reads every placed moby (`moby_list2`) an
 | `LISTED` | Bosses, turrets, spawners, Tabora/Grelbin crystal-field creatures | No | Fights with their own rules; turrets and spawners are not huntable enemies |
 | error | The port would not say | No | Fail safe |
 
-Dead and scene-actor mobys are excluded too. Among the eligible ones, a class with a cited name
+Dead mobys are excluded. The RAC2 port leaves them out of the list, and the `DEAD` flag is
+checked anyway. Scene actors are spawned, so they have no key and are excluded too. Among the eligible ones, a class with a cited name
 ([src/enemy_names.h](../src/enemy_names.h)) is preferred, then the pick is uniform.
 
 `SCRIPTED` and `LISTED` enemies are not unsafe in themselves. They are left out of version 1

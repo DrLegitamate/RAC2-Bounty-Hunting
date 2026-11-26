@@ -43,7 +43,10 @@ and paint address. Read the moby list and judge every placed moby with `moby_cop
 - *New visit*: pick a target, pick a weapon from the inventory, pick a hue (random at least 60°
   from the last, or the fixed one). Start the contract, or record that this visit has none.
 
-**Each frame:** read the moby list, the hero's slot and class, and the hand. Check the target is
+**Each frame:** advance the mod's clock, but only while the player is in control, so streaks,
+hit windows and banners do not run out under the pause menu or in a scene. If the port's load
+counter moved without the load hook, start the load's tracking afresh and re-find the target by
+key. Then read the moby list, the hero's slot and class, and the hand. Check the target is
 still in its slot, re-find it by key if not, and declare it lost after 30 ticks missing. Announce
 and equip once the player is in control. Redraw the HUD lines.
 
